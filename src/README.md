@@ -7,7 +7,7 @@ This tool is a versatile remote command execution tool designed to be portable a
 Quick Start
 Clone the repository:
 
-git clone https://github.com/your-username/REMOTEMAL.git
+git clone https://github.com/Alan-JKR/Trojan
 
 Navigate to the tool's directory:
 cd your-repository
