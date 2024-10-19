@@ -85,7 +85,10 @@ class RemoteClient(object):
         return None
 
     def ByteOrderMark(self,data):
-        return data.lstrip('\ufeff') #Remove BOM charcter if it exists.
+        try:
+            return data.replace('\ufeff','') #Remove BOM charcter if it exists.
+        except:
+            return data
 
     def DownloadTextFile(self,file_path):
 
@@ -239,6 +242,9 @@ class RemoteClient(object):
             #Creating a new process for remote command execution 
             self.process=subprocess.Popen(["cmd.exe","/c"]+cmd_list,universal_newlines=True,cwd=self.path,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
             stdout,stderr=self.process.communicate(input=input,timeout=self.TimeOut)
+
+            #Sends the flag for the data is stdout or stderr
+            self.send(stdout) if (stdout) else self.send("Yes") if (stderr) else self.send("No")
             #Sends the output if the command has any output 
             #sends the error if the command has any error
             #Sends <Command Executed successfully> if no output or error for the executed command

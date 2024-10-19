@@ -97,7 +97,7 @@ class RemoteServer(object):
 
     def ByteOrderMark(self,data):
         try:
-            return data.lstrip('\ufeff') #Remove BOM charcter if it exists.
+            return data.replace('\ufeff','') #Remove BOM charcter if it exists.
         except:
             return data
 
