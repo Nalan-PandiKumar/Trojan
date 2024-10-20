@@ -1,9 +1,11 @@
+from Load import *
+from tqdm import tqdm
 import socket
 import os
 import sys
-from Load import *
 import time
 import struct 
+import threading
 
 class RemoteServer(object):
     
@@ -115,9 +117,7 @@ class RemoteServer(object):
         return None
 
 
-    def bin_recv(self):
-        # Receive the total file size from the client
-        file_size = self.recv_size()
+    def bin_recv(self,file_size):
         
         # Calculate the number of chunks to receive based on the file size and buffer size
         num_of_chunks = (file_size + self.file_transfer_buffer - 1) // self.file_transfer_buffer
@@ -162,6 +162,10 @@ class RemoteServer(object):
             return data
 
 
+
+
+
+
     def DownloadTextFile(self, file_path):
         # Check if the file exists on the server
         is_file_exist = self.recv()
@@ -169,7 +173,7 @@ class RemoteServer(object):
             # Prompt user for download path and file name
             dld_path = input("\x1b[0;32m>>>Enter Download path:\x1b[0m")
             file_name = input("\x1b[0;32m>>>Enter File Name:\x1b[0m")
-            
+            print("\n\n")
             # Check if the specified download path exists
             if os.path.exists(dld_path):
                 self.send("True")  # Notify the server that the path is valid
@@ -194,6 +198,10 @@ class RemoteServer(object):
             print(f"\x1b[0;31m The target path {file_path} doesn't exist\x1b[0m")
 
 
+
+
+
+
     def DownloadedBinaryFile(self, file_path):
         # Check if the binary file exists on the server
         is_file_exist = self.recv()
@@ -201,7 +209,7 @@ class RemoteServer(object):
             # Prompt user for download path and file name
             dld_path = input("\x1b[0;32m>>>Enter Download path:\x1b[0m")
             file_name = input("\x1b[0;32m>>>Enter File Name:\x1b[0m")
-            
+            print("\n\n")
             # Check if the specified download path exists
             if os.path.exists(dld_path):
                 self.send("True")  # Notify the server that the path is valid
@@ -209,9 +217,12 @@ class RemoteServer(object):
                 try:
                     # Open the specified file for binary writing with a defined buffer size
                     with open(dld_path + '/' + file_name, mode='wb', buffering=self.file_transfer_buffer) as file:
-                        file_content = self.bin_recv()  # Receive the binary file content in chunks
+
+                        file_size = self.recv_size()    # Receive the total file size from the client
+                        file_content = self.bin_recv(file_size)  # Receive the binary file content in chunks
+                        num_of_chunks = (file_size + self.file_transfer_buffer - 1) // self.file_transfer_buffer #Total chunks to recieve
                         
-                        for chunk in file_content:
+                        for chunk in tqdm(file_content,total=num_of_chunks, colour='green', unit='B', unit_scale=True, desc=file_name, bar_format='{l_bar}{bar:30}{r_bar}'):
                             # Raise an error if a null byte is received, indicating permission denial
                             if (chunk == b'\x00'):
                                 raise PermissionError("\n\x1b[0;31m Permission denied by the target [!] \x1b[0m\n")
@@ -220,6 +231,7 @@ class RemoteServer(object):
                             elif (chunk == b'\\x00'):
                                 raise OSError(f"\n\x1b[0;31m While Downloading File: {file_name} an error occurred \x1b[0m\n")
                             else:
+                                time.sleep(0.00005)    #This loads the progress bar slowly
                                 file.write(chunk)  # Write the received chunk to the file
 
                 except PermissionError as Perror:
@@ -239,6 +251,8 @@ class RemoteServer(object):
         else:
             # Inform the user that the target file path does not exist
             print(f"\n\x1b[0;31m The target path {file_path} doesn't exist\x1b[0m\n")
+
+
 
 
     def UploadTextFile(self, file_path):
@@ -277,37 +291,48 @@ class RemoteServer(object):
             self.send("False")  # Notify the server that the file does not exist
             print(f"\x1b[0;31m The path {file_path} doesn't exist\x1b[0m")
 
+
+
     def UploadBinaryFile(self, file_path):
         # Check if the specified binary file exists on the client side
         is_file_exist = os.path.exists(file_path)
-        if (is_file_exist):
+        if is_file_exist:
             self.send("True")  # Notify the server that the file exists
             
             # Prompt the user for the upload destination path on the server
-            upld_path = input("\x1b[0;32m>>>Enter Upload path:\x1b[0m")
+            upld_path = input("\x1b[0;32m>>>Enter Upload path:\x1b[0m ")
             self.send(upld_path)  # Send the upload path to the server
             
             # Prompt the user for the file name to be used on the server
-            file_name = input("\x1b[0;32m>>>Enter File Name:\x1b[0m")
+            file_name = input("\x1b[0;32m>>>Enter File Name:\x1b[0m ")
             self.send(file_name)  # Send the file name to the server
+            print("\n\n")
             
             # Check if the specified upload path exists on the server
             is_upld_path_exist = self.recv()
-            if (is_upld_path_exist == "True"):
+            if is_upld_path_exist == "True":
                 try:
                     # Open the binary file in read mode with specified buffering
                     with open(file_path, mode='rb', buffering=self.file_transfer_buffer) as file:
                         file_size = os.path.getsize(file_path)  # Get the size of the file
                         self.send_size(file_size)  # Send the file size to the server
                         
-                        while True:
-                            # Read chunks of the file based on the buffer size
-                            file_chunk = file.read(self.file_transfer_buffer)
+                        # Initialize tqdm progress bar
+                        with tqdm(total=file_size, unit='B',colour="red",unit_scale=True, desc=file_name, bar_format='{l_bar}{bar:30}{r_bar}') as pbar:
+                            total_sent = 0  # Variable to keep track of total bytes sent
 
-                            if (not file_chunk):
-                                break  # Exit loop if there are no more chunks to read
+                            while True:
+                                time.sleep(0.00005)    #This loads the progress bar slowly
+                                # Read chunks of the file based on the buffer size
+                                file_chunk = file.read(self.file_transfer_buffer)
 
-                            self.bin_send(file_chunk)  # Send the binary chunk to the server
+                                if not file_chunk:
+                                    break  # Exit loop if there are no more chunks to read
+
+                                self.bin_send(file_chunk)  # Send the binary chunk to the server
+                                total_sent += len(file_chunk)  # Update total bytes sent
+                                pbar.update(len(file_chunk))  # Update the progress bar
+                                
 
                 except PermissionError as perror:
                     # Handle permission errors by notifying the server and sending a specific error signal
@@ -322,7 +347,7 @@ class RemoteServer(object):
                 else:
                     # Wait for a response from the server indicating the write operation result
                     write_operation = self.recv()
-                    if (write_operation == "True"):
+                    if write_operation == "True":
                         # Inform the user that the file was uploaded successfully
                         print(f"\x1b[0;32m [^] {file_name} Uploaded Successfully\x1b[0m")
 
@@ -333,6 +358,7 @@ class RemoteServer(object):
         else:
             self.send("False")  # Notify the server that the file does not exist
             print(f"\x1b[0;31m The path {file_path} doesn't exist\x1b[0m")
+
 
 
     def GetBuffer(self,flag=False):
