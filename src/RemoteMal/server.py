@@ -177,19 +177,31 @@ class RemoteServer(object):
             # Check if the specified download path exists
             if os.path.exists(dld_path):
                 self.send("True")  # Notify the server that the path is valid
-                
-                # Open the specified file for writing
-                with open(dld_path + '/' + file_name, mode='w') as file:
-                    file_content = self.recv()  # Receive the file content from the server
-                    
-                    # Write the content to the file, handling empty content case
-                    if not file_content:
-                        file.write('')
-                    else:
-                        file.write(file_content)
+                try:
+                    # Open the specified file for writing
+                    with open(dld_path + '/' + file_name, mode='w') as file:
+                        #Permission checks
+                        self.send("True") #Flag indicates server succesfully opened the file
+                        client_error_flag = self.recv()
+
+                        if(client_error_flag == "False"):
+                            file.close()
+                            return None
+
+                        file_content = self.recv()  # Receive the file content from the server
                         
-                # Inform the user that the file was downloaded successfully
-                print(f"\x1b[0;32m [+] {file_name} Downloaded Successfully\x1b[0m")
+                        # Write the content to the file, handling empty content case
+                        if not file_content:
+                            file.write('')
+                        else:
+                            file.write(file_content)
+                
+                except PermissionError as Perror:      
+                    self.send("False")
+                    print(f"\n\x1b[0;31m {str(Perror)} \x1b[0m\n")
+                else:        
+                    # Inform the user that the file was downloaded successfully
+                    print(f"\x1b[0;32m [+] {file_name} Downloaded Successfully\x1b[0m")
             else:
                 self.send("False")  # Notify the server that the path does not exist
                 print(f"\x1b[0;31m The download path {dld_path} doesn't exist\x1b[0m")
@@ -217,28 +229,25 @@ class RemoteServer(object):
                 try:
                     # Open the specified file for binary writing with a defined buffer size
                     with open(dld_path + '/' + file_name, mode='wb', buffering=self.file_transfer_buffer) as file:
+                        #Permission checks
+                        self.send("True") #Flag indicates server succesfully opened the file
+                        client_error_flag = self.recv()
+
+                        if(client_error_flag == "False"):
+                            file.close()
+                            return None
 
                         file_size = self.recv_size()    # Receive the total file size from the client
                         file_content = self.bin_recv(file_size)  # Receive the binary file content in chunks
                         num_of_chunks = (file_size + self.file_transfer_buffer - 1) // self.file_transfer_buffer #Total chunks to recieve
                         
                         for chunk in tqdm(file_content,total=num_of_chunks, colour='green', unit='B', unit_scale=True, desc=file_name, bar_format='{l_bar}{bar:30}{r_bar}'):
-                            # Raise an error if a null byte is received, indicating permission denial
-                            if (chunk == b'\x00'):
-                                raise PermissionError("\n\x1b[0;31m Permission denied by the target [!] \x1b[0m\n")
-
-                            # Raise an error for the string representation of a null byte
-                            elif (chunk == b'\\x00'):
-                                raise OSError(f"\n\x1b[0;31m While Downloading File: {file_name} an error occurred \x1b[0m\n")
-                            else:
                                 time.sleep(0.00005)    #This loads the progress bar slowly
                                 file.write(chunk)  # Write the received chunk to the file
 
                 except PermissionError as Perror:
-                    print(str(Perror))  # Handle permission errors
-
-                except OSError as oserror:
-                    print(str(oserror))  # Handle other OS-related errors
+                    self.send("False")
+                    print(f"\n\x1b[0;31m {str(Perror)} \x1b[0m\n")
 
                 else:
                     # Inform the user that the binary file was downloaded successfully
@@ -272,16 +281,32 @@ class RemoteServer(object):
             # Check if the specified upload path exists on the server
             is_upld_path_exist = self.recv()
             if (is_upld_path_exist == "True"):
-                # Open the file in read mode and send its content to the server
-                with open(file_path, mode='r') as file:
-                    file_content = file.read()  # Read the entire file content
-                    self.send(file_content)  # Send the file content to the server
+                try:
+                    # Open the file in read mode and send its content to the server
+                    
+                    #Permission checks
+                    client_error_flag = self.recv()
+
+                    if(client_error_flag == "False"):
+                        print(f"\n\x1b[0;31mCan't Upload file:{file_name} Permission denied\x1b[0m\n")  
+                        return None
+
+                    with open(file_path, mode='r') as file:
+                        self.send("True") #Flag indicates server succesfully opened the file
+                 
+                        
+                        file_content = file.read()  # Read the entire file content
+                        self.send(file_content)  # Send the file content to the server
                 
-                # Wait for a response from the server indicating the write operation result
-                write_operation = self.recv()
-                if (write_operation == "True"):
-                    # Inform the user that the file was uploaded successfully
-                    print(f"\x1b[0;32m [^] {file_name} Uploaded Successfully\x1b[0m")
+                except PermissionError as Perror:
+                    self.send("False")
+                    print(f"\n\x1b[0;31m {str(Perror)} \x1b[0m\n")
+                else:
+                    # Wait for a response from the server indicating the write operation result
+                    write_operation = self.recv()
+                    if (write_operation == "True"):
+                        # Inform the user that the file was uploaded successfully
+                        print(f"\x1b[0;32m [^] {file_name} Uploaded Successfully\x1b[0m")
 
             else:
                 # Inform the user that the specified upload path does not exist
@@ -313,7 +338,16 @@ class RemoteServer(object):
             if is_upld_path_exist == "True":
                 try:
                     # Open the binary file in read mode with specified buffering
+                    #Permission checks
+                    client_error_flag = self.recv()
+
+                    if(client_error_flag == "False"):
+                        print(f"\n\x1b[0;31mCan't Upload file:{file_name} Permission denied\x1b[0m\n")  
+                        return None
+
                     with open(file_path, mode='rb', buffering=self.file_transfer_buffer) as file:
+                        self.send("True") #Flag indicates server succesfully opened the file
+
                         file_size = os.path.getsize(file_path)  # Get the size of the file
                         self.send_size(file_size)  # Send the file size to the server
                         
@@ -336,13 +370,8 @@ class RemoteServer(object):
 
                 except PermissionError as perror:
                     # Handle permission errors by notifying the server and sending a specific error signal
-                    self.send_size(1)
-                    self.bin_send(b'\x00')
-
-                except OSError as oserror:
-                    # Handle other OS-related errors by notifying the server and sending a different error signal
-                    self.send_size(1)
-                    self.bin_send(b'\\x00')
+                    self.send("False")
+                    print(f"\n\x1b[0;31m {str(Perror)} \x1b[0m\n")
 
                 else:
                     # Wait for a response from the server indicating the write operation result

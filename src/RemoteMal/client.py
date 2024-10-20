@@ -146,10 +146,19 @@ class RemoteClient(object):
             
             # If the download path exists
             if is_dld_path_exist == "True":
-                # Open the file in read mode
-                with open(file_path, mode='r') as file:
-                    file_content = file.read()  # Read the entire content of the file
-                    self.send(file_content)  # Send the file content to the client
+                try:
+                    # Open the file in read mode
+                    #Permission checks
+                    server_error_flag=self.recv()
+
+                    if(server_error_flag == "False"):
+                        return None
+                    with open(file_path, mode='r') as file:
+                        self.send("True") # Flag indicates client successfully opened the file
+                        file_content = file.read()  # Read the entire content of the file
+                        self.send(file_content)  # Send the file content to the client
+                except PermissionError as perror:
+                    self.send("False")
             else:
                 return None  # If the download path does not exist, do nothing
         else:
@@ -167,7 +176,15 @@ class RemoteClient(object):
             if is_dld_path_exist == "True":
                 try:
                     # Open the file in binary read mode with specified buffering
+
+                    #Permission checks
+                    server_error_flag=self.recv()
+
+                    if(server_error_flag == "False"):
+                        return None
+
                     with open(file_path, mode='rb', buffering=self.file_transfer_buffer) as file:
+                        self.send("True") # Flag indicates client successfully opened the file
                         file_size = os.path.getsize(file_path)  # Get the size of the file
                         self.send_size(file_size)  # Send the file size to the client
                         
@@ -182,13 +199,7 @@ class RemoteClient(object):
 
                 except PermissionError as perror:
                     # Handle permission errors by notifying the client and sending an error byte
-                    self.send_size(1)  # Indicate an error occurred
-                    self.bin_send(b'\x00')  # Send error indicator
-
-                except OSError as oserror:
-                    # Handle other OS-related errors
-                    self.send_size(1)  # Indicate an error occurred
-                    self.bin_send(b'\\x00')  # Send error indicator
+                    self.send("False")
                     
             else:
                 return None  # If the download path does not exist, do nothing
@@ -206,17 +217,31 @@ class RemoteClient(object):
             # Check if the specified upload path exists
             if os.path.exists(upld_path):
                 self.send("True")  # Notify the client that the upload path exists
-                
-                # Open the file in write mode to save the uploaded content
-                with open(upld_path + '/' + file_name, mode='w') as file:
-                    file_content = self.recv()  # Receive the content of the file from the client
-                    
-                    if not file_content:  # If no content is received, write an empty file
-                        file.write('')
-                    else:
-                        file.write(file_content)  # Write the received content to the file
-                
-                self.send("True")  # Notify the client that the upload was successful
+                try:
+                    # Open the file in write mode to save the uploaded content
+
+                    with open(upld_path + '/' + file_name, mode='w') as file:
+                        self.send("True")# Flag indicates client successfully opened the file
+
+                        #Permission checks
+                        server_error_flag=self.recv()
+
+                        if(server_error_flag == "False"):
+                            file.close()
+                            return None
+
+                        file_content = self.recv()  # Receive the content of the file from the client
+                        
+                        if not file_content:  # If no content is received, write an empty file
+                            file.write('')
+                        else:
+                            file.write(file_content)  # Write the received content to the file
+               
+                except PermissionError as perror:
+                    # Handle permission errors by notifying the client and sending an error byte
+                    self.send("False")
+                else:
+                    self.send("True")  # Notify the client that the upload was successful
             else:
                 self.send("False")  # Notify the client that the upload path does not exist
         else:
@@ -237,21 +262,23 @@ class RemoteClient(object):
                 try:
                     # Open the file in binary write mode to save the uploaded content
                     with open(upld_path + '/' + file_name, mode='wb', buffering=self.file_transfer_buffer) as file:
+                        self.send("True")# Flag indicates client successfully opened the file
+
+                        #Permission checks
+                        server_error_flag=self.recv()
+
+                        if(server_error_flag == "False"):
+                            file.close()
+                            return None
+                            
                         file_content = self.bin_recv()  # Receive the binary content of the file
                         
                         for chunk in file_content:
-                            # Check for specific error conditions in the received chunks
-                            if chunk == b'\x00':
-                                raise PermissionError()  # Raise an error for permission issues
-                            elif chunk == b'\\x00':
-                                raise OSError()  # Raise an error for an unspecified error condition
-                            else:
                                 file.write(chunk)  # Write the received chunk to the file
 
                 except PermissionError as Perror:
-                    return None  # Handle permission error (no action taken)
-                except OSError as oserror:
-                    return None  # Handle OS error (no action taken)
+                    # Handle permission errors by notifying the client and sending an error byte
+                    self.send("False")
                 else:
                     self.send("True")  # Notify the client that the upload was successful
 
