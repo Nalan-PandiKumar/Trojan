@@ -23,14 +23,6 @@ cd Trojan
 pip install -r requirements.txt
 ```
 
-### `requirements.txt`
-
-Make sure to include the necessary modules in your `requirements.txt` file. For example:
-
-```
-tqdm
-```
-
 ## 📜 Usage
 
 ### Starting the Server
