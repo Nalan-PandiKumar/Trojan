@@ -1,3 +1,4 @@
 pyfiglet
 texttable
 termcolor
+tqdm
