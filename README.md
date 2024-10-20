@@ -10,16 +10,26 @@ Welcome to **remotemal**, a powerful and flexible Remote Access Tool that allows
 - **Command Execution**: Execute commands on the remote machine and retrieve output.
 - **Support for Text and Binary Files**: Upload and download both text and binary files effortlessly.
 - **Real-time Progress Feedback**: Enjoy a smooth user experience with progress bars during file transfers.
+- **Terminal-like Functionality**: Navigate directories as you would in a normal command prompt/terminal, supporting all types of directory navigations.
+- **Cross-Platform Support**: Compatible with Windows, Linux, and macOS.
 
 ## ⚙️ Installation
 
 To get started with `remotemal`, clone the repository and install the required dependencies:
 
 ```bash
-git clone https://github.com/yourusername/remotemal.git
-cd remotemal
+git clone https://github.com/Nalan-PandiKumar/Trojan.git
+cd Trojan
+pip install -r requirements.txt
 ```
 
+### `requirements.txt`
+
+Make sure to include the necessary modules in your `requirements.txt` file. For example:
+
+```
+tqdm
+```
 
 ## 📜 Usage
 
@@ -96,6 +106,6 @@ Ensure that the target system is connected and has the `remotemal` client runnin
 
 ## 📝 License
 
-This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for more information.
+This project is licensed under the MIT License. See the [LICENSE](https://github.com/Nalan-PandiKumar/Trojan/blob/main/LICENSE.txt) file for more information.
 
 ---
