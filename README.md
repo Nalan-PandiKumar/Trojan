@@ -19,7 +19,7 @@ To get started with `remotemal`, clone the repository and install the required d
 
 ```bash
 git clone https://github.com/Nalan-PandiKumar/Trojan.git
-cd Trojan
+cd Trojan/src
 pip install -r requirements.txt
 ```
 
