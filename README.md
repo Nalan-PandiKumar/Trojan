@@ -1,6 +1,6 @@
 ---
 
-# 🚀 remotemal - Remote Access Tool (RAT)
+# 🚀 remotemal - Remote Access Trojan(RAT)
 
 Welcome to **remotemal**, a powerful and flexible Remote Access Trojan  that allows you to control systems remotely, transfer files, and execute commands seamlessly. 
 
