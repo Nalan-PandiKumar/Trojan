@@ -2,7 +2,7 @@
 
 # 🚀 remotemal - Remote Access Tool (RAT)
 
-Welcome to **remotemal**, a powerful and flexible Remote Access Tool that allows you to control systems remotely, transfer files, and execute commands seamlessly. Whether you're managing a fleet of machines or conducting security assessments, `remotemal` has you covered!
+Welcome to **remotemal**, a powerful and flexible Remote Access Trojan  that allows you to control systems remotely, transfer files, and execute commands seamlessly. 
 
 ## 🌟 Features
 
